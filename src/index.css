@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+/* Optional: Keep your base styles here if needed */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: #f9fafb; /* gray-50 */
+  color: #111827; /* gray-900 */
+  overscroll-behavior-y: none;
+}
