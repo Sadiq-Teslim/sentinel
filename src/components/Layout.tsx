@@ -58,7 +58,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       <nav className="fixed bottom-0 w-full max-w-md bg-white border-t border-gray-200 px-2 py-2 flex justify-around items-center z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
         {/* SCAN */}
         <button
-          onClick={() => navigate("/")}
+          onClick={() => navigate("/scan")}
           className={`flex flex-col items-center p-2 rounded-xl w-20 transition-all duration-300 ${
             location.pathname === "/"
               ? "text-ng-green bg-green-50 scale-105"
