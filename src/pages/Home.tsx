@@ -1,68 +1,70 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { checkDomainSecurity, type ScanResult, type SecurityStatus } from '../lib/scanner';
 import { useAudioAlert } from '../hooks/useAudioAlert';
-import { ShieldCheck, ShieldAlert, Search, Globe, Volume2, Share2, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Search, Globe, Volume2, Share2, AlertTriangle, CheckCircle2, Lock, History } from 'lucide-react';
 
 const Home: React.FC = () => {
+  // 1. STATE MANAGEMENT
   const [domain, setDomain] = useState<string>('');
   const [status, setStatus] = useState<SecurityStatus>('idle');
   const [result, setResult] = useState<ScanResult | null>(null);
   const [language, setLanguage] = useState<string>('english');
   
+  // 2. HOOKS
   const [searchParams] = useSearchParams();
   const { playAlert, stopAlert, isPlaying } = useAudioAlert();
 
-    const handleScan = useCallback(async (e: React.FormEvent | null, manualDomain: string | null = null) => {
-        if (e) e.preventDefault();
-        const target = manualDomain || domain;
-        if (!target) return;
+  // 3. SCAN LOGIC
+  const handleScan = useCallback(async (e: React.FormEvent | null, manualDomain: string | null = null) => {
+    if (e) e.preventDefault();
+    const target = manualDomain || domain;
+    if (!target) return;
 
-        setStatus('scanning');
+    setStatus('scanning');
+    setResult(null);
+    stopAlert();
+
+    try {
+        const scanResult = await checkDomainSecurity(target);
+        setResult(scanResult);
+        setStatus(scanResult.status);
+
+        // Auto-play audio with slight delay for UI update
+        setTimeout(() => {
+            playAlert(scanResult.status, language);
+        }, 500);
+    } catch (err) {
+        console.error('[handleScan] error', err);
         setResult(null);
-        stopAlert();
+        setStatus('idle');
+    }
+  }, [domain, stopAlert, playAlert, language]);
 
-        try {
-            const scanResult = await checkDomainSecurity(target);
-            setResult(scanResult);
-            setStatus(scanResult.status);
-
-            setTimeout(() => {
-                playAlert(scanResult.status, language);
-            }, 500);
-        } catch (err) {
-            console.error('[handleScan] error', err);
-            setResult(null);
-            setStatus('idle');
-        }
-    }, [domain, stopAlert, playAlert, language]);
-
-    // Handle WhatsApp Shares
-    useEffect(() => {
-        const sharedText = searchParams.get('text') || searchParams.get('url');
-        if (sharedText) {
-            const urlRegex = /(https?:\/\/[^\s]+)/g;
-            const foundUrl = sharedText.match(urlRegex);
-            if (foundUrl && foundUrl[0]) {
-                try {
-                    const urlObj = new URL(foundUrl[0]);
-                    // avoid calling setState synchronously inside an effect
-                    setTimeout(() => setDomain(urlObj.hostname), 0);
-                    // call asynchronously to avoid blocking
-                    setTimeout(() => handleScan(null, urlObj.hostname), 0);
-                } catch (e) {
-                    console.error("Invalid URL", e);
-                }
+  // 4. SHARE TARGET LOGIC (WhatsApp Integration)
+  useEffect(() => {
+    const sharedText = searchParams.get('text') || searchParams.get('url');
+    if (sharedText) {
+        const urlRegex = /(https?:\/\/[^\s]+)/g;
+        const foundUrl = sharedText.match(urlRegex);
+        if (foundUrl && foundUrl[0]) {
+            try {
+                const urlObj = new URL(foundUrl[0]);
+                setTimeout(() => setDomain(urlObj.hostname), 0);
+                setTimeout(() => handleScan(null, urlObj.hostname), 0);
+            } catch (e) {
+                console.error("Invalid URL shared");
             }
         }
-        // only re-run when searchParams or handleScan identity changes
-    }, [searchParams, handleScan]);
+    }
+  }, [searchParams, handleScan]);
 
   return (
     <Layout>
       {/* --- HERO SECTION --- */}
-      <div className="bg-[#008751] text-white p-6 pb-12 -mx-0 rounded-b-[2.5rem] shadow-xl relative overflow-hidden">
+      <div className="bg-[#008751] text-white p-6 pb-12 -mx-0 rounded-b-[2.5rem] shadow-xl relative overflow-hidden transition-all duration-500">
         <div className="relative z-10 mt-2">
             <h1 className="text-3xl font-black mb-2 tracking-tight">Sentinel</h1>
             <p className="text-green-50 text-xs font-medium opacity-90 max-w-[200px] leading-relaxed">
@@ -70,7 +72,7 @@ const Home: React.FC = () => {
             </p>
         </div>
         
-        {/* Language Switcher (Glass Effect) */}
+        {/* Language Switcher */}
         <div className="absolute top-8 right-6 z-20">
             <select 
                 value={language}
@@ -91,7 +93,7 @@ const Home: React.FC = () => {
 
       {/* --- INPUT SECTION --- */}
       <div className="relative -mt-8 mb-8 px-6">
-        <form onSubmit={(e) => handleScan(e)} className="relative group shadow-lg rounded-2xl">
+        <form onSubmit={(e) => handleScan(e)} className="relative group shadow-lg rounded-2xl animate-in slide-in-from-bottom-4 duration-500">
             <input 
                 type="text" 
                 placeholder="e.g. firs.gov.ng"
@@ -125,7 +127,7 @@ const Home: React.FC = () => {
 
         {/* STATE: Scanning */}
         {status === 'scanning' && (
-            <div className="text-center py-12">
+            <div className="text-center py-12 animate-in fade-in duration-300">
                 <div className="inline-block p-5 rounded-full bg-green-50 mb-6 relative">
                     <div className="absolute inset-0 border-4 border-[#008751] border-t-transparent rounded-full animate-spin"></div>
                     <Globe size={48} className="text-[#008751]" />
@@ -135,10 +137,12 @@ const Home: React.FC = () => {
             </div>
         )}
 
-        {/* STATE: SAFE */}
+        {/* STATE: SAFE (.ng + DNSSEC + High Score) */}
         {status === 'safe' && result && (
-            <div className="bg-white rounded-[2rem] p-6 shadow-2xl border-t-4 border-[#008751]">
-                <div className="flex justify-between items-start mb-6">
+            <div className="bg-white rounded-[2rem] p-6 shadow-2xl border-t-4 border-[#008751] animate-in slide-in-from-bottom-5 duration-500">
+                
+                {/* Header & Audio */}
+                <div className="flex justify-between items-start mb-4">
                     <div className="bg-green-50 p-3 rounded-2xl">
                         <ShieldCheck size={32} className="text-[#008751]" />
                     </div>
@@ -150,26 +154,65 @@ const Home: React.FC = () => {
                     </button>
                 </div>
 
+                {/* Trust Score Visualizer */}
                 <div className="mb-6">
                     <h2 className="text-3xl font-black text-gray-900 mb-1 tracking-tight">Authentic</h2>
-                    <p className="text-sm text-gray-500 font-medium">This website is verified safe.</p>
+                    <div className="flex items-center gap-3 mt-2">
+                        <div className="h-3 flex-1 bg-gray-100 rounded-full overflow-hidden">
+                            <div 
+                                className="h-full bg-[#008751] rounded-full transition-all duration-1000 ease-out" 
+                                style={{ width: `${(result.trustScore || 0) * 100}%` }}
+                            ></div>
+                        </div>
+                        <span className="text-sm font-black text-[#008751]">{(result.trustScore || 0) * 100}% Trust</span>
+                    </div>
                 </div>
 
-                <div className="bg-gray-50 rounded-2xl p-5 space-y-4 border border-gray-100 mb-6">
-                    <div className="flex justify-between text-sm items-center border-b border-gray-200 pb-3">
+                {/* Technical Security Grid (The "Pro" Layer) */}
+                <div className="grid grid-cols-2 gap-3 mb-6">
+                    {/* DNSSEC */}
+                    <div className={`p-3 rounded-xl border ${result.hasDNSSEC ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+                        <span className="text-[10px] text-gray-500 font-bold uppercase">Integrity</span>
+                        <div className="flex items-center gap-1.5 font-bold text-sm text-gray-800 mt-1">
+                            {result.hasDNSSEC ? <CheckCircle2 size={16} className="text-ng-green"/> : <AlertTriangle size={16} className="text-yellow-500"/>}
+                            DNSSEC
+                        </div>
+                    </div>
+                    {/* DANE */}
+                    <div className={`p-3 rounded-xl border ${result.hasDANE ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+                        <span className="text-[10px] text-gray-500 font-bold uppercase">Chain</span>
+                        <div className="flex items-center gap-1.5 font-bold text-sm text-gray-800 mt-1">
+                            {result.hasDANE ? <CheckCircle2 size={16} className="text-ng-green"/> : <span className="text-gray-400">-</span>}
+                            DANE
+                        </div>
+                    </div>
+                    {/* TLS */}
+                    <div className={`p-3 rounded-xl border ${result.hasTLS ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+                        <span className="text-[10px] text-gray-500 font-bold uppercase">Encrypt</span>
+                        <div className="flex items-center gap-1.5 font-bold text-sm text-gray-800 mt-1">
+                            {result.hasTLS ? <Lock size={14} className="text-ng-green"/> : <AlertTriangle size={16} />}
+                            TLS 1.3
+                        </div>
+                    </div>
+                    {/* Age */}
+                    <div className={`p-3 rounded-xl border ${result.domainAge === 'mature' ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'}`}>
+                        <span className="text-[10px] text-gray-500 font-bold uppercase">History</span>
+                        <div className="flex items-center gap-1.5 font-bold text-sm text-gray-800 mt-1">
+                             <History size={16} className={result.domainAge === 'mature' ? 'text-ng-green' : 'text-yellow-500'} />
+                            {result.domainAge === 'mature' ? "Verified" : "New"}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Domain Details */}
+                <div className="bg-gray-50 rounded-2xl p-4 space-y-3 border border-gray-100 mb-6">
+                    <div className="flex justify-between text-sm items-center border-b border-gray-200 pb-2">
                         <span className="text-gray-400 font-medium">Domain</span>
                         <span className="font-mono font-bold text-gray-800">{result.domain}</span>
                     </div>
-                    <div className="flex justify-between text-sm items-center border-b border-gray-200 pb-3">
+                    <div className="flex justify-between text-sm items-center">
                         <span className="text-gray-400 font-medium">Registrar</span>
                         <span className="font-bold text-gray-800 text-right text-xs max-w-[150px]">{result.registrar}</span>
-                    </div>
-                    <div className="flex justify-between text-sm items-center">
-                        <span className="text-gray-400 font-medium">Security</span>
-                        <div className="flex items-center gap-1.5 bg-green-100 text-[#006b3f] text-[10px] font-black px-2.5 py-1 rounded-md uppercase tracking-wide">
-                            <CheckCircle2 size={12} />
-                            {result.dnssec ? 'DNSSEC SIGNED' : 'TRUSTED CACHE'}
-                        </div>
                     </div>
                 </div>
                 
@@ -179,9 +222,9 @@ const Home: React.FC = () => {
             </div>
         )}
 
-        {/* STATE: UNSAFE */}
+        {/* STATE: UNSAFE (Phishing) */}
         {status === 'unsafe' && result && (
-            <div className="bg-white rounded-[2rem] p-6 shadow-2xl border-t-4 border-red-600">
+            <div className="bg-white rounded-[2rem] p-6 shadow-2xl border-t-4 border-red-600 animate-in shake duration-500">
                 <div className="flex justify-between items-start mb-6">
                     <div className="bg-red-50 p-3 rounded-2xl">
                         <ShieldAlert size={32} className="text-red-600" />
@@ -216,9 +259,9 @@ const Home: React.FC = () => {
             </div>
         )}
 
-        {/* STATE: CAUTION */}
+        {/* STATE: CAUTION (.com or unknown) */}
         {status === 'caution' && result && (
-            <div className="bg-white rounded-[2rem] p-6 shadow-2xl border-t-4 border-yellow-500">
+            <div className="bg-white rounded-[2rem] p-6 shadow-2xl border-t-4 border-yellow-500 animate-in slide-in-from-bottom-5 duration-500">
                 <div className="flex justify-between items-start mb-6">
                     <div className="bg-yellow-50 p-3 rounded-2xl">
                         <AlertTriangle size={32} className="text-yellow-600" />
@@ -239,7 +282,10 @@ const Home: React.FC = () => {
                 <div className="bg-yellow-50 rounded-2xl p-5 text-xs font-medium text-yellow-900 leading-relaxed mb-6 border border-yellow-100">
                      {/* Show dynamic details here */}
                      {result.details.map((msg, i) => (
-                        <p key={i} className="mb-1">• {msg}</p>
+                        <p key={i} className="mb-1 flex gap-2">
+                             <span className="text-yellow-600">•</span>
+                             {msg}
+                        </p>
                     ))}
                 </div>
                 

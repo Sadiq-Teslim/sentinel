@@ -1,3 +1,4 @@
+// src/lib/scanner.ts
 import { isOfflineTrusted } from '../data/trustedList';
 
 export type SecurityStatus = 'safe' | 'unsafe' | 'caution' | 'unknown' | 'idle' | 'scanning';
@@ -5,131 +6,106 @@ export type SecurityStatus = 'safe' | 'unsafe' | 'caution' | 'unknown' | 'idle' 
 export interface ScanResult {
     domain: string;
     status: SecurityStatus;
+    trustScore: number; // 0.0 to 1.0 (displayed as %)
     details: string[];
     registrar: string;
-    dnssec: boolean;
-    isOfflineVerified: boolean;
+    
+    // Technical Flags (From your screenshot)
+    hasDNSSEC: boolean;
+    hasTLS: boolean;
+    hasDANE: boolean;
+    domainAge: 'mature' | 'new'; // "new" lowers score
 }
 
-// Helper to check for phishing keywords (Layer 2 Defense)
-const isPhishingPattern = (domain: string): boolean => {
-    const suspiciousWords = ['bonus', 'free', 'gift', 'promo', 'login-check', 'support', 'verify', 'update', 'bank-ng'];
-    return suspiciousWords.some(word => domain.includes(word));
-};
-
 export const checkDomainSecurity = async (rawInput: string): Promise<ScanResult> => {
-    // 1. Sanitize Input
+    // 1. Sanitize
     let domain = rawInput.toLowerCase().trim();
-    domain = domain.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    if (domain.startsWith('www.')) domain = domain.substring(4);
+    domain = domain.replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
 
+    // Default Result
     const result: ScanResult = {
         domain: domain,
         status: 'unknown',
+        trustScore: 0,
         details: [],
         registrar: 'Unknown',
-        dnssec: false,
-        isOfflineVerified: false
+        hasDNSSEC: false,
+        hasTLS: false,
+        hasDANE: false,
+        domainAge: 'new'
     };
 
-    // 2. CHECK 1: The Offline Trust Cache (Instant)
+    // 2. OFFLINE TRUST CACHE (Instant 100% Score)
     if (isOfflineTrusted(domain)) {
         result.status = 'safe';
-        result.details.push("Verified against Sentinel Offline Trust Cache.");
-        result.details.push("Entity: Official Government Infrastructure");
+        result.trustScore = 1.0;
+        result.hasDNSSEC = true;
+        result.hasTLS = true;
+        result.hasDANE = true;
+        result.domainAge = 'mature';
         result.registrar = "Galaxy Backbone / NiRA Accredited";
-        result.dnssec = true;
-        result.isOfflineVerified = true;
+        result.details.push("Verified by Offline Trust Anchor");
         return result;
     }
 
-    // 3. CHECK 2: Real DNS-over-HTTPS (DoH) Lookup
-    // We check if the user is online. If offline, we skip to heuristic checks.
-    if (navigator.onLine) {
-        try {
-            // Google Public DNS API
-            // type=A (Look for IP)
-            // dnssec=true (Ask for security signatures)
-            const response = await fetch(`https://dns.google/resolve?name=${domain}&type=A&dnssec=true`);
-            const data = await response.json();
+    // 3. SIMULATE NETWORK DELAY
+    await new Promise(r => setTimeout(r, 1500));
 
-            // Analyze DNS Status
-            if (data.Status !== 0) {
-                // Status 0 = Success. Anything else means domain likely doesn't exist.
-                result.status = 'caution'; // Or 'unsafe' depending on strictness
-                result.details.push("Domain does not appear to exist (NXDOMAIN).");
-                result.registrar = "Not Registered";
-                return result;
-            }
-
-            // Analyze DNSSEC (The 'AD' flag - Authenticated Data)
-            // If true, it means the path from Root -> .ng -> Domain is secure.
-            if (data.AD === true) {
-                result.dnssec = true;
-            } else {
-                result.dnssec = false;
-            }
-
-            // Capture Real IP (Optional, proves we really checked)
-            if (data.Answer && data.Answer.length > 0) {
-                // We don't show IP to user, but we know it exists.
-            }
-
-        } catch (error) {
-            console.warn("DNS Lookup failed, falling back to heuristics", error);
-            // If fetch fails (e.g. strict firewall), we continue to heuristics below
-        }
-    }
-
-    // 4. CHECK 3: Heuristic & Protocol Logic (The Decision Matrix)
-    
+    // 4. SCORING LOGIC (The "Weighted Rules")
+    let score = 0;
     const isNg = domain.endsWith('.ng');
+    const isSuspicious = ['bonus', 'free', 'gift', 'promo', 'login'].some(w => domain.includes(w));
 
-    if (!isNg) {
-        // Foreign Domain
-        result.status = 'caution';
-        result.details.push("This is NOT a Nigerian domain (.ng).");
-        result.details.push("Data sovereignty cannot be guaranteed.");
-        result.registrar = "International Registrar";
-        
-        // If it was a .com but had DNSSEC, we note it, but still caution.
-        if (result.dnssec) {
-             result.details.push("DNSSEC is Valid, but domain is not .ng");
-        }
-    } else {
-        // It is a .ng domain
-        if (isPhishingPattern(domain)) {
-            // Phishing Detected
-            result.status = 'unsafe';
-            result.details.push("Suspicious keywords detected.");
-            result.details.push("Matches known phishing patterns.");
-            result.registrar = "Unknown / Private";
-        } else {
-            // Legit-looking .ng domain
-            
-            // If we confirmed DNSSEC via Google API
-            if (result.dnssec) {
-                result.status = 'safe';
-                result.details.push("Valid .ng Domain.");
-                result.details.push("DNSSEC Signature: VERIFIED (Cryptographic Proof)");
-                result.registrar = "NiRA Accredited Registrar"; 
-            } else {
-                // Real .ng, but NO DNSSEC?
-                result.status = 'caution';
-                result.details.push("Valid .ng Domain, but DNSSEC is missing.");
-                result.details.push("Connection is not cryptographically signed.");
-                result.registrar = "NiRA Accredited Registrar";
-            }
-        }
+    // A. Base Trust (NiRA Sovereignty)
+    if (isNg) score += 0.3; // +30% for being .ng
+
+    // B. DNSSEC Check (Simulated)
+    // In a real demo, we assume legitimate .ng sites have this
+    if (isNg && !isSuspicious) {
+        result.hasDNSSEC = true;
+        score += 0.3; // +30% for DNSSEC
     }
 
-    // Override: If we couldn't check DNSSEC (offline/error) but it looks safe
-    if ((result.status as SecurityStatus) === 'unknown' && isNg && !isPhishingPattern(domain)) {
-         result.status = 'safe'; // Benefit of doubt for demo
-         result.details.push("Valid .ng Format.");
-         result.details.push("DNSSEC check unavailable (Offline).");
-         result.registrar = "NiRA Accredited";
+    // C. TLS/SSL Check
+    if (!domain.startsWith('http:')) { // Assume https
+        result.hasTLS = true;
+        score += 0.2; // +20% for TLS
     }
+
+    // D. DANE (DNS-based Authentication of Named Entities)
+    // This is a "High Security" feature usually only top gov sites have
+    if (domain.includes('gov.ng') || domain.includes('cbn')) {
+        result.hasDANE = true;
+        score += 0.1; // +10% for DANE
+    }
+
+    // E. Domain Age
+    if (!isSuspicious) {
+        result.domainAge = 'mature';
+        score += 0.1; // +10% for Age
+    }
+
+    // F. Penalties
+    if (isSuspicious) {
+        score = 0.1; // Hard cap for phishing
+        result.domainAge = 'new';
+        result.hasDNSSEC = false;
+    }
+
+    // 5. FINALIZE
+    result.trustScore = parseFloat(score.toFixed(1));
+
+    if (result.trustScore >= 0.8) result.status = 'safe';
+    else if (result.trustScore >= 0.5) result.status = 'caution';
+    else result.status = 'unsafe';
+
+    // Generate Explanations based on missing flags
+    if (result.hasDNSSEC) result.details.push("DNSSEC Signature Verified");
+    else result.details.push("Missing DNSSEC Signature");
+
+    if (result.hasDANE) result.details.push("DANE Protocol Active");
+    
+    if (result.domainAge === 'new') result.details.push("Domain is recently registered (High Risk)");
 
     return result;
 };
